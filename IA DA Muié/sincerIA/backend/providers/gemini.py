@@ -36,7 +36,7 @@ class GeminiProvider(AIProvider):
 
         self.client = genai.Client(
             api_key=self.api_key,
-        )
+        ) if self.configured else None
 
         # ========================================================
         # TIMEOUT POR MODELO

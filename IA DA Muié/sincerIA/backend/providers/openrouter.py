@@ -31,7 +31,7 @@ class OpenRouterProvider(AIProvider):
                 "HTTP-Referer": "https://sinceria.app",
                 "X-Title": "SincerIA",
             },
-        )
+        ) if self.configured else None
 
     async def chat(
         self,

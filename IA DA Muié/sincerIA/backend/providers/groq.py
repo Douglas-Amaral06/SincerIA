@@ -29,7 +29,7 @@ class GroqProvider(AIProvider):
         self.client = AsyncOpenAI(
             api_key=self.api_key,
             base_url=settings.GROQ_BASE_URL,
-        )
+        ) if self.configured else None
 
     def _is_gpt_oss(self) -> bool:
         return self.model in {

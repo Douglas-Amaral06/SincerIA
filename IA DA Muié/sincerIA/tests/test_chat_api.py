@@ -2,6 +2,7 @@ import io
 import tempfile
 import unittest
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
 
 from fastapi.testclient import TestClient
@@ -10,10 +11,17 @@ from backend.data.database import Database
 from backend.data.repositories import ConversationRepository, MemoryRepository
 from backend.main import app
 from backend.memory.manager import MemoryManager
-from backend.orchestration.types import OrchestratorResult, RouteType
+from backend.orchestration.types import OrchestrationError, OrchestratorResult, RouteType
 
 
 class ChatApiTests(unittest.TestCase):
+    def test_missing_cloud_keys_returns_actionable_error(self):
+        with patch("backend.main.PROVIDERS", {"none": SimpleNamespace(configured=False)}), \
+             patch("backend.main.orchestrator.chat", new=AsyncMock(side_effect=OrchestrationError("Sem modelo"))):
+            response = TestClient(app).post("/api/chat", json={"message": "Oi", "mode": "normal"})
+        self.assertEqual(response.status_code, 503)
+        self.assertIn("GROQ_API_KEY", response.json()["detail"]["message"])
+
     def test_text_and_photo_are_answered_and_saved(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)

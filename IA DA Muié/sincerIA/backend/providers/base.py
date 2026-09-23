@@ -42,7 +42,7 @@ class AIProvider(ABC):
 
     @property
     def configured(self) -> bool:
-        return bool(self.api_key)
+        return bool(self.api_key and self.api_key.strip())
 
     def timeout_budget(self) -> float:
         """Tempo mínimo necessário para o provider concluir seus próprios fallbacks."""

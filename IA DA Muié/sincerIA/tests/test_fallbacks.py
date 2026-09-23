@@ -9,12 +9,26 @@ from backend.orchestration.types import RouteType
 from backend.providers.base import ImageInput, ProviderError, ProviderResponse
 from backend.providers.gemini import GeminiProvider
 from backend.providers.groq import GroqProvider
+from backend.providers.nvidia import NvidiaProvider
+from backend.providers.openrouter import OpenRouterProvider
+from backend.providers.venice import VeniceProvider
 
 
 class GeminiFallbackTests(unittest.IsolatedAsyncioTestCase):
+    async def test_missing_keys_do_not_crash_backend_import(self):
+        with patch.object(settings, "GROQ_API_KEY", ""), \
+             patch.object(settings, "OPENROUTER_API_KEY", ""), \
+             patch.object(settings, "NVIDIA_API_KEY", ""), \
+             patch.object(settings, "VENICE_API_KEY", ""), \
+             patch.object(settings, "GEMINI_API_KEY", ""):
+            for provider in (GroqProvider(), OpenRouterProvider(), NvidiaProvider(), VeniceProvider(), GeminiProvider()):
+                self.assertFalse(provider.configured)
+                self.assertIsNone(provider.client)
+
     async def test_vision_has_second_provider_without_affecting_text(self):
         self.assertEqual(orchestrator.get_chain(RouteType.VISION), ["gemini", "groq_vision"])
         self.assertIn("groq_qwen", orchestrator.get_chain(RouteType.CONVERSATION))
+        self.assertIn("gemini", orchestrator.get_chain(RouteType.CONVERSATION))
 
     async def test_groq_photo_is_attached_to_last_user_message(self):
         provider = object.__new__(GroqProvider)

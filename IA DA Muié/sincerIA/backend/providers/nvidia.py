@@ -24,7 +24,7 @@ class NvidiaProvider(AIProvider):
         self.client = AsyncOpenAI(
             api_key=self.api_key,
             base_url=settings.NVIDIA_BASE_URL,
-        )
+        ) if self.configured else None
 
     async def chat(
         self,

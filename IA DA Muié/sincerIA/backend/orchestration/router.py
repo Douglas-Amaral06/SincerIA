@@ -23,6 +23,7 @@ class Orchestrator:
         "groq_fast",
         "groq_power",
         "nvidia",
+        "gemini",
     ]
 
     REASONING_CHAIN = [
@@ -31,6 +32,7 @@ class Orchestrator:
         "groq_qwen",
         "openrouter",
         "groq_fast",
+        "gemini",
     ]
 
     VISION_CHAIN = [

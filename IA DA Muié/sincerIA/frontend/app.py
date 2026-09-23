@@ -195,11 +195,20 @@ with st.sidebar:
     except requests.RequestException:
         st.session_state.history_items = []
         st.caption("Histórico disponível quando o backend iniciar.")
+    except Exception:
+        logger.exception("Falha ao iniciar o backend integrado")
+        st.session_state.history_items = []
+        st.error("O backend não iniciou. Consulte os logs do aplicativo.")
     if st.button("Atualizar histórico", use_container_width=True):
         st.session_state.history_items = None
         st.rerun()
     st.divider()
     st.session_state.debug = st.toggle("Mostrar motor utilizado", value=st.session_state.debug)
+
+if EMBEDDED_BACKEND:
+    from backend.core.config import settings
+    if not any((settings.GROQ_API_KEY, settings.OPENROUTER_API_KEY, settings.NVIDIA_API_KEY, settings.GEMINI_API_KEY)):
+        st.warning("Nenhuma chave de IA configurada. Adicione GROQ_API_KEY ou GEMINI_API_KEY em Manage app → Settings → Secrets.")
 
 
 if not st.session_state.messages:

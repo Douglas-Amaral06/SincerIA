@@ -26,6 +26,7 @@ from backend.orchestration.types import OrchestrationError
 from backend.personality.engine import personality_engine
 from backend.personality.profiles import PROFILES
 from backend.providers.base import ImageInput
+from backend.providers.registry import PROVIDERS
 
 
 logger = logging.getLogger("API")
@@ -108,9 +109,15 @@ async def execute_chat(
         result = await orchestrator.chat(messages=messages, images=attachments, temperature=0.9, max_tokens=1800)
     except OrchestrationError as exc:
         logger.warning("nenhum provider respondeu rota=%s", "vision" if attachments else "text")
+        if not any(provider.configured for provider in PROVIDERS.values()):
+            error_message = "Nenhuma chave de IA configurada. Adicione GROQ_API_KEY ou GEMINI_API_KEY nos Secrets do Streamlit Cloud."
+        elif attachments and not any(PROVIDERS[name].configured for name in ("gemini", "groq_vision")):
+            error_message = "Para analisar imagens, configure GEMINI_API_KEY ou GROQ_API_KEY nos Secrets do Streamlit Cloud."
+        else:
+            error_message = "Nenhuma IA conseguiu responder agora."
         raise HTTPException(
             status_code=503,
-            detail={"message": "Nenhuma IA conseguiu responder agora.", "attempts": [item.model_dump() for item in serialize_attempts(exc.attempts)]},
+            detail={"message": error_message, "attempts": [item.model_dump() for item in serialize_attempts(exc.attempts)]},
         ) from exc
     except Exception as exc:
         logger.exception("erro interno durante chat")
