@@ -195,10 +195,11 @@ with st.sidebar:
     except requests.RequestException:
         st.session_state.history_items = []
         st.caption("Histórico disponível quando o backend iniciar.")
-    except Exception:
+    except Exception as exc:
         logger.exception("Falha ao iniciar o backend integrado")
         st.session_state.history_items = []
-        st.error("O backend não iniciou. Consulte os logs do aplicativo.")
+        missing_module = f": {exc.name}" if isinstance(exc, ModuleNotFoundError) and exc.name else ""
+        st.error(f"O backend não iniciou ({type(exc).__name__}{missing_module}). Consulte os logs do aplicativo.")
     if st.button("Atualizar histórico", use_container_width=True):
         st.session_state.history_items = None
         st.rerun()
