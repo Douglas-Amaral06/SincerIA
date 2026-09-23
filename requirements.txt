@@ -1,0 +1,10 @@
+fastapi
+uvicorn[standard]
+streamlit>=1.64.0
+openai
+google-genai
+httpx
+requests
+python-dotenv
+pydantic
+python-multipart
