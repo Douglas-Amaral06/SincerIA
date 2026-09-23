@@ -9,4 +9,4 @@ dist/
 build/
 .DS_Store
 .streamlit/secrets.toml
-data/
+/data/
