@@ -5,13 +5,36 @@ from __future__ import annotations
 import html
 import logging
 import os
+import sys
 from datetime import datetime
+from pathlib import Path
+from urllib.parse import urlparse
 
+import httpx
 import requests
 import streamlit as st
 
 
-BACKEND_URL = os.getenv("BACKEND_URL", "http://localhost:8000").rstrip("/")
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
+if str(PROJECT_ROOT) not in sys.path:
+    sys.path.insert(0, str(PROJECT_ROOT))
+
+# No Community Cloud, apenas o processo Streamlit é iniciado. As credenciais
+# configuradas em Secrets precisam estar disponíveis antes de importar o backend.
+try:
+    for secret_name in (
+        "GROQ_API_KEY", "OPENROUTER_API_KEY", "NVIDIA_API_KEY",
+        "GEMINI_API_KEY", "VENICE_API_KEY", "OLLAMA_API_KEY",
+        "DATABASE_PATH", "UPLOAD_DIR",
+    ):
+        if secret_name in st.secrets and not os.getenv(secret_name):
+            os.environ[secret_name] = str(st.secrets[secret_name])
+except FileNotFoundError:
+    pass
+
+BACKEND_URL = os.getenv("BACKEND_URL", "").rstrip("/")
+EMBEDDED_BACKEND = not BACKEND_URL or urlparse(BACKEND_URL).hostname in {"localhost", "127.0.0.1", "::1", "0.0.0.0"}
+ATTACHMENT_BASE_URL = BACKEND_URL if not EMBEDDED_BACKEND else ""
 logger = logging.getLogger("sinceria.frontend")
 MODES = {
     "normal": "Normal",
@@ -67,12 +90,31 @@ render_html(
 )
 
 
+@st.cache_resource
+def embedded_client():
+    from fastapi.testclient import TestClient
+    from backend.main import app
+
+    client = TestClient(app)
+    client.__enter__()
+    return client
+
+
 def api_request(method: str, path: str, **kwargs):
     # Listar histórico não pode congelar a tela inteira quando o backend caiu.
     # Chamadas de chat passam um timeout maior explicitamente.
     timeout = kwargs.pop("timeout", 4)
-    response = requests.request(method, f"{BACKEND_URL}{path}", timeout=timeout, **kwargs)
-    response.raise_for_status()
+    if EMBEDDED_BACKEND:
+        try:
+            response = embedded_client().request(method, path, **kwargs)
+            response.raise_for_status()
+        except httpx.HTTPStatusError as exc:
+            raise requests.HTTPError(str(exc), response=exc.response) from exc
+        except httpx.RequestError as exc:
+            raise requests.RequestException(str(exc)) from exc
+    else:
+        response = requests.request(method, f"{BACKEND_URL}{path}", timeout=timeout, **kwargs)
+        response.raise_for_status()
     return response.json() if response.content else None
 
 
@@ -86,6 +128,13 @@ def api_error(exc: requests.RequestException) -> str:
         except ValueError:
             pass
     return "Não consegui falar com o backend agora."
+
+
+@st.cache_data(ttl=300)
+def attachment_content(path: str) -> bytes:
+    response = embedded_client().get(path)
+    response.raise_for_status()
+    return response.content
 
 
 def conversation_groups(items: list[dict]) -> dict[str, list[dict]]:
@@ -162,11 +211,22 @@ for item in st.session_state.messages:
     with st.chat_message(item["role"]):
         for attachment in item.get("attachments", []):
             mime_type = attachment.get("mime_type", "")
-            source = attachment.get("data") or f"{BACKEND_URL}{attachment.get('url', '')}"
+            attachment_url = attachment.get("url")
+            try:
+                source = attachment.get("data") or (
+                    attachment_content(attachment_url)
+                    if EMBEDDED_BACKEND and attachment_url
+                    else f"{ATTACHMENT_BASE_URL}{attachment_url}"
+                )
+            except httpx.HTTPError:
+                st.caption("Anexo indisponível no momento.")
+                continue
             if mime_type.startswith("image/"):
                 st.image(source, width=360)
-            elif attachment.get("url"):
-                st.link_button(f"Arquivo: {attachment['filename']}", f"{BACKEND_URL}{attachment['url']}")
+            elif attachment_url and EMBEDDED_BACKEND:
+                st.download_button(f"Baixar: {attachment['filename']}", source, file_name=attachment["filename"], mime=mime_type, key=f"attachment-{attachment['id']}")
+            elif attachment_url:
+                st.link_button(f"Arquivo: {attachment['filename']}", source)
             else:
                 render_html(f"<span class='attachment-chip'>{html.escape(attachment.get('name', 'Arquivo'))}</span>")
         if item.get("error"):

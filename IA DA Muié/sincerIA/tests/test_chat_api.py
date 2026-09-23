@@ -57,6 +57,9 @@ class ChatApiTests(unittest.TestCase):
                     self.assertEqual([item["role"] for item in messages],
                                      ["user", "assistant", "user", "assistant"])
                     self.assertEqual(messages[2]["attachments"][0]["filename"], "foto.png")
+                    attachment = client.get(messages[2]["attachments"][0]["url"])
+                    self.assertEqual(attachment.status_code, 200)
+                    self.assertEqual(attachment.content, b"example")
 
 
 if __name__ == "__main__":
