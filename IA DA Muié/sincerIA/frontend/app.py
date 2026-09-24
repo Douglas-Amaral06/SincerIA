@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import html
+import hmac
+import json
 import logging
 import os
 import sys
@@ -25,7 +27,7 @@ try:
     for secret_name in (
         "GROQ_API_KEY", "OPENROUTER_API_KEY", "NVIDIA_API_KEY",
         "GEMINI_API_KEY", "VENICE_API_KEY", "OLLAMA_API_KEY",
-        "DATABASE_PATH", "UPLOAD_DIR",
+        "DATABASE_PATH", "UPLOAD_DIR", "ADMIN_USER", "ADMIN_PASSWORD",
     ):
         if secret_name in st.secrets and not os.getenv(secret_name):
             os.environ[secret_name] = str(st.secrets[secret_name])
@@ -161,50 +163,159 @@ def load_conversation(conversation_id: str) -> None:
 def create_conversation(*, reset_messages: bool = True) -> None:
     data = api_request("POST", "/api/conversations", json={"mode": st.session_state.mode})
     st.session_state.active_conversation_id = data["id"]
+    st.session_state.visible_conversation_ids.add(data["id"])
     if reset_messages:
         st.session_state.messages = []
         st.session_state.pending = None
     st.session_state.history_items = None
 
 
-for key, value in {"messages": [], "mode": "nuclear", "debug": False, "active_conversation_id": None, "pending": None, "history_items": None}.items():
+def show_admin_panel() -> None:
+    render_html("<style>.block-container { max-width: 1280px; }</style>")
+    st.title("Atendimentos")
+    st.caption("Perguntas dos usuários e respostas dos agentes, sem dashboards.")
+    admin_password = os.getenv("ADMIN_PASSWORD", "")
+    if not admin_password:
+        st.info("Painel indisponível: configure ADMIN_PASSWORD nos Secrets do Streamlit Cloud.")
+        return
+    if not st.session_state.admin_authenticated:
+        with st.form("admin-login", clear_on_submit=True):
+            username = st.text_input("Login")
+            password = st.text_input("Senha", type="password")
+            submitted_login = st.form_submit_button("Entrar")
+        if submitted_login:
+            valid_user = hmac.compare_digest(username, os.getenv("ADMIN_USER", "ADMIN"))
+            valid_password = hmac.compare_digest(password, admin_password)
+            if valid_user and valid_password:
+                st.session_state.admin_authenticated = True
+                st.rerun()
+            else:
+                st.error("Login ou senha inválidos.")
+        return
+    if not EMBEDDED_BACKEND:
+        st.error("O painel de atendimentos requer o backend integrado ao Streamlit.")
+        return
+
+    from backend.core.config import settings
+    from backend.data.database import Database
+    from backend.data.repositories import ConversationRepository
+
+    database = Database(Path(settings.DATABASE_PATH))
+    repository = ConversationRepository(database, Path(settings.UPLOAD_DIR))
+    try:
+        database.initialize()
+        search = st.text_input("Buscar por pergunta, resposta, agente ou ID da conversa")
+        limit = st.selectbox("Atendimentos exibidos", [50, 200, 500], index=1)
+        rows = repository.list_interactions(search, limit=limit)
+        all_rows = repository.list_interactions(limit=None)
+    except Exception:
+        logger.exception("Falha ao consultar atendimentos")
+        st.error("Não consegui consultar o banco de atendimentos. Veja os logs do app.")
+        return
+
+    st.caption(f"{len(rows)} atendimento(s) exibido(s).")
+    if rows:
+        st.dataframe(
+            [{
+                "Data/hora": row["created_at"],
+                "Conversa": row["conversation_id"],
+                "Pergunta": row["question"],
+                "Resposta": row["answer"],
+                "Agente": row["provider"] or "",
+                "Anexos": row["attachments"],
+            } for row in rows],
+            hide_index=True,
+            width="stretch",
+            height=480,
+            column_config={
+                "Data/hora": st.column_config.TextColumn(width="small"),
+                "Conversa": st.column_config.TextColumn(width="small"),
+                "Pergunta": st.column_config.TextColumn(width="large"),
+                "Resposta": st.column_config.TextColumn(width="large"),
+                "Agente": st.column_config.TextColumn(width="small"),
+            },
+        )
+        selected = st.selectbox(
+            "Abrir atendimento",
+            range(len(rows)),
+            format_func=lambda index: f"{rows[index]['created_at']} · {rows[index]['question'][:70]}",
+        )
+        row = rows[selected]
+        st.caption(f"Conversa {row['conversation_id']} · Modo {row['mode']} · Agente {row['provider'] or '—'} / {row['model'] or '—'}")
+        with st.chat_message("user"):
+            st.markdown(row["question"])
+            if row["attachments"]:
+                st.caption(f"Anexos: {row['attachments']}")
+        with st.chat_message("assistant"):
+            st.markdown(row["answer"])
+    else:
+        st.info("Nenhum atendimento encontrado.")
+
+    export = json.dumps({"exported_at": datetime.now().isoformat(), "interactions": all_rows}, ensure_ascii=False, indent=2)
+    st.download_button(
+        "Baixar todas as interações em JSON",
+        data=export.encode("utf-8"),
+        file_name=f"sinceria-interacoes-{datetime.now():%Y%m%d-%H%M}.json",
+        mime="application/json",
+    )
+    st.caption("No Streamlit Community Cloud, este SQLite pode ser apagado em reinícios. Baixe o JSON para guardar uma cópia.")
+
+
+for key, value in {"messages": [], "mode": "nuclear", "debug": False, "active_conversation_id": None, "pending": None, "history_items": None, "page": "chat", "admin_authenticated": False, "visible_conversation_ids": set()}.items():
     if key not in st.session_state:
         st.session_state[key] = value
 
 
 with st.sidebar:
-    render_html("<div class='brand-kicker'>conversa privada</div><div class='brand-name'>SincerIA</div><div class='brand-copy'>Opiniões que seus amigos talvez sejam educados demais para dar.</div>")
-    if st.button("＋ Nova conversa", key="new-conversation", use_container_width=True):
-        try:
-            create_conversation()
+    render_html("<div class='brand-kicker'>conversa</div><div class='brand-name'>SincerIA</div><div class='brand-copy'>Opiniões que seus amigos talvez sejam educados demais para dar.</div>")
+    if st.session_state.page == "admin":
+        if st.button("← Voltar ao chat", use_container_width=True):
+            st.session_state.page = "chat"
+            st.session_state.admin_authenticated = False
             st.rerun()
-        except requests.RequestException as exc:
-            st.error(api_error(exc))
-    render_html("<div class='section-label' style='margin:1.6rem 0 .45rem'>Histórico</div>")
-    try:
-        if st.session_state.history_items is None:
-            st.session_state.history_items = api_request("GET", "/api/conversations", timeout=1.5)
-        for group, items in conversation_groups(st.session_state.history_items).items():
-            if items:
-                st.caption(group)
-            for item in items:
-                marker = "› " if item["id"] == st.session_state.active_conversation_id else ""
-                if st.button(f"{marker}{item['title']}", key=f"conversation-{item['id']}", use_container_width=True):
-                    load_conversation(item["id"])
-                    st.rerun()
-    except requests.RequestException:
-        st.session_state.history_items = []
-        st.caption("Histórico disponível quando o backend iniciar.")
-    except Exception as exc:
-        logger.exception("Falha ao iniciar o backend integrado")
-        st.session_state.history_items = []
-        missing_module = f": {exc.name}" if isinstance(exc, ModuleNotFoundError) and exc.name else ""
-        st.error(f"O backend não iniciou ({type(exc).__name__}{missing_module}). Consulte os logs do aplicativo.")
-    if st.button("Atualizar histórico", use_container_width=True):
-        st.session_state.history_items = None
-        st.rerun()
-    st.divider()
+        if st.session_state.admin_authenticated and st.button("Sair do painel", use_container_width=True):
+            st.session_state.admin_authenticated = False
+            st.rerun()
+    else:
+        if st.button("＋ Nova conversa", key="new-conversation", use_container_width=True):
+            try:
+                create_conversation()
+                st.rerun()
+            except requests.RequestException as exc:
+                st.error(api_error(exc))
+        render_html("<div class='section-label' style='margin:1.6rem 0 .45rem'>Histórico desta sessão</div>")
+        try:
+            if st.session_state.history_items is None:
+                st.session_state.history_items = api_request("GET", "/api/conversations", timeout=1.5)
+            own_items = [item for item in st.session_state.history_items if item["id"] in st.session_state.visible_conversation_ids]
+            for group, items in conversation_groups(own_items).items():
+                if items:
+                    st.caption(group)
+                for item in items:
+                    marker = "› " if item["id"] == st.session_state.active_conversation_id else ""
+                    if st.button(f"{marker}{item['title']}", key=f"conversation-{item['id']}", use_container_width=True):
+                        load_conversation(item["id"])
+                        st.rerun()
+        except requests.RequestException:
+            st.session_state.history_items = []
+            st.caption("Histórico disponível quando o backend iniciar.")
+        except Exception as exc:
+            logger.exception("Falha ao iniciar o backend integrado")
+            st.session_state.history_items = []
+            missing_module = f": {exc.name}" if isinstance(exc, ModuleNotFoundError) and exc.name else ""
+            st.error(f"O backend não iniciou ({type(exc).__name__}{missing_module}). Consulte os logs do aplicativo.")
+        if st.button("Atualizar histórico", use_container_width=True):
+            st.session_state.history_items = None
+            st.rerun()
+        st.divider()
+        if st.button("🔐 Painel admin", use_container_width=True):
+            st.session_state.page = "admin"
+            st.rerun()
     st.session_state.debug = st.toggle("Mostrar motor utilizado", value=st.session_state.debug)
+
+if st.session_state.page == "admin":
+    show_admin_panel()
+    st.stop()
 
 if EMBEDDED_BACKEND:
     from backend.core.config import settings
@@ -215,7 +326,9 @@ if EMBEDDED_BACKEND:
 if not st.session_state.messages:
     render_html("<section class='empty-hero'><h1>Pode falar.</h1><p>Ela não foi programada para concordar com você. Talvez seja exatamente por isso que você veio.</p><p><strong>Qual foi a má decisão da vez?</strong></p></section>")
 else:
-    render_html("<div class='chat-eyebrow'>conversa privada</div><div class='chat-heading'>Sem plateia. Sem filtro.</div>")
+    render_html("<div class='chat-eyebrow'>conversa</div><div class='chat-heading'>Sem filtro.</div>")
+
+st.caption("As conversas respondidas são salvas e podem ser vistas pela administração do app.")
 
 for item in st.session_state.messages:
     with st.chat_message(item["role"]):

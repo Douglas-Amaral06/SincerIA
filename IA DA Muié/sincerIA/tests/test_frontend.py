@@ -8,6 +8,7 @@ from unittest.mock import AsyncMock, patch
 import requests
 from streamlit.testing.v1 import AppTest
 
+from backend.core.config import settings
 from backend.data.database import Database
 from backend.data.repositories import ConversationRepository, MemoryRepository
 from backend.memory.manager import MemoryManager
@@ -15,6 +16,43 @@ from backend.orchestration.types import OrchestratorResult, RouteType
 
 
 class FrontendTests(unittest.TestCase):
+    def test_admin_panel_requires_login_before_showing_interactions(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            database = Database(root / "chat.db")
+            database.initialize()
+            conversations = ConversationRepository(database, root / "uploads")
+            conversation = conversations.create_conversation("normal")
+            conversations.add_exchange(conversation.id, "normal", "Pergunta reservada", [], "Resposta reservada", "test", "model", "conversation")
+
+            with patch.dict(os.environ, {"BACKEND_URL": "", "ADMIN_USER": "ADMIN", "ADMIN_PASSWORD": "testing-only-secret"}), \
+                 patch.object(settings, "DATABASE_PATH", str(root / "chat.db")), \
+                 patch.object(settings, "UPLOAD_DIR", str(root / "uploads")), \
+                 patch("backend.main.database", database), \
+                 patch("backend.main.conversations", conversations):
+                app = AppTest.from_file(str(Path(__file__).resolve().parents[1] / "frontend" / "app.py"), default_timeout=15).run()
+                self.assertFalse(app.exception)
+                self.assertEqual(len(app.dataframe), 0)
+                self.assertNotIn("Pergunta reservada", [item.label for item in app.button])
+
+                next(item for item in app.button if item.label == "🔐 Painel admin").click().run()
+                self.assertFalse(app.exception)
+                self.assertEqual(len(app.dataframe), 0)
+
+                next(item for item in app.text_input if item.label == "Login").set_value("ADMIN")
+                next(item for item in app.text_input if item.label == "Senha").set_value("errada")
+                next(item for item in app.button if item.label == "Entrar").click().run()
+                self.assertFalse(app.session_state["admin_authenticated"])
+                self.assertEqual(len(app.dataframe), 0)
+
+                next(item for item in app.text_input if item.label == "Login").set_value("ADMIN")
+                next(item for item in app.text_input if item.label == "Senha").set_value("testing-only-secret")
+                next(item for item in app.button if item.label == "Entrar").click().run()
+                self.assertTrue(app.session_state["admin_authenticated"])
+                self.assertFalse(app.exception)
+                self.assertEqual(app.dataframe[0].value.iloc[0]["Pergunta"], "Pergunta reservada")
+                self.assertEqual(app.dataframe[0].value.iloc[0]["Resposta"], "Resposta reservada")
+
     def test_embedded_backend_replies_without_port_8000(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)

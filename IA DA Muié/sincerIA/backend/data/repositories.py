@@ -57,6 +57,42 @@ class ConversationRepository:
             ).fetchall()
         return [self._conversation(row) for row in rows]
 
+    def list_interactions(self, search: str = "", limit: int | None = 200) -> list[dict]:
+        """Lista pares de pergunta e resposta para o painel administrativo."""
+        term = f"%{search.strip()}%"
+        query = """
+            WITH numbered AS (
+                SELECT m.*, ROW_NUMBER() OVER (
+                    PARTITION BY m.conversation_id, m.role
+                    ORDER BY m.created_at, m.rowid
+                ) AS turn_number
+                FROM messages m
+            )
+            SELECT u.created_at, u.conversation_id, c.mode,
+                   u.content AS question, a.content AS answer,
+                   a.provider, a.model, a.route,
+                   COALESCE((
+                       SELECT GROUP_CONCAT(filename, ', ')
+                       FROM attachments WHERE message_id = u.id
+                   ), '') AS attachments
+            FROM numbered u
+            JOIN numbered a ON a.conversation_id = u.conversation_id
+                           AND a.role = 'assistant'
+                           AND a.turn_number = u.turn_number
+            JOIN conversations c ON c.id = u.conversation_id
+            WHERE u.role = 'user'
+              AND (u.content LIKE ? OR a.content LIKE ?
+                   OR COALESCE(a.provider, '') LIKE ? OR u.conversation_id LIKE ?)
+            ORDER BY u.created_at DESC, u.id DESC
+        """
+        parameters: list[object] = [term] * 4
+        if limit is not None:
+            query += " LIMIT ?"
+            parameters.append(max(1, limit))
+        with self.database.session() as connection:
+            rows = connection.execute(query, parameters).fetchall()
+        return [dict(row) for row in rows]
+
     def get_conversation(self, conversation_id: str) -> StoredConversation | None:
         with self.database.session() as connection:
             row = connection.execute(
