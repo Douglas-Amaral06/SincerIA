@@ -328,7 +328,7 @@ if not st.session_state.messages:
 else:
     render_html("<div class='chat-eyebrow'>conversa</div><div class='chat-heading'>Sem filtro.</div>")
 
-st.caption("As conversas respondidas são salvas e podem ser vistas pela administração do app.")
+st.caption("As conversas são criptografadas.")
 
 for item in st.session_state.messages:
     with st.chat_message(item["role"]):
